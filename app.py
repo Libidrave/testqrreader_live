@@ -12,44 +12,37 @@ QR_CODE_SCANNER_HTML = """
     <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/streamlit-component-lib@1.4.0/dist/streamlit-component-lib.js"></script>
     <style>
+        body { margin: 0; padding: 0; }
         #reader {
             width: 100%;
             border: 2px solid #f0f2f6;
             border-radius: 10px;
-        }
-        #html5-qrcode-button-camera-start, #html5-qrcode-button-camera-stop {
-            display: inline-block;
-            padding: 10px 20px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-top: 10px;
         }
     </style>
 </head>
 <body>
     <div id="reader"></div>
     <script type="text/javascript">
+        // Fungsi ini dipanggil ketika QR code berhasil dipindai
         function onScanSuccess(decodedText, decodedResult) {
-            // Mengirimkan hasil pindaian kembali ke Streamlit
+            // Mengirim teks yang didekode kembali ke Streamlit
+            // Ini akan menyebabkan skrip Python berjalan kembali (rerun)
             Streamlit.setComponentValue(decodedText);
         }
 
+        // Fungsi ini dipanggil jika pemindaian gagal (bisa diabaikan)
         function onScanFailure(error) {
-            // Anda bisa menambahkan logging atau UI feedback di sini jika perlu
             // console.warn(`Code scan error = ${error}`);
         }
 
-        // Tunggu hingga library Streamlit siap
-        Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, function(event) {
-            let html5QrcodeScanner = new Html5QrcodeScanner(
-                "reader",
-                { fps: 10, qrbox: {width: 250, height: 250} },
-                /* verbose= */ false);
-            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
-        });
+        // Membuat instance pemindai baru
+        let html5QrcodeScanner = new Html5QrcodeScanner(
+            "reader", // ID dari elemen div tempat pemindai akan dirender
+            { fps: 10, qrbox: {width: 250, height: 250} },
+            /* verbose= */ false);
+        
+        // Merender pemindai. Ini akan meminta izin kamera.
+        html5QrcodeScanner.render(onScanSuccess, onScanFailure);
     </script>
 </body>
 </html>
@@ -71,11 +64,7 @@ def find_product_by_id(df, product_id):
     """Mencari produk dalam DataFrame berdasarkan ID."""
     if df.empty or product_id is None:
         return None
-    
-    # PERBAIKAN DEFENSif: Konversi kedua sisi ke string secara eksplisit
-    # untuk memastikan perbandingan yang aman dan menghindari TypeError.
     product = df[df['id'].astype(str) == str(product_id)]
-    
     if not product.empty:
         return product.iloc[0]
     return None
@@ -92,15 +81,16 @@ if not df.empty:
     st.subheader("Pindai QR Code di Sini")
     
     # Menampilkan komponen HTML/JS dan menangkap nilainya
-    qr_code = components.html(QR_CODE_SCANNER_HTML, height=500)
+    qr_code_result = components.html(QR_CODE_SCANNER_HTML, height=500)
 
     # Menampilkan hasil pencarian
     st.subheader("Hasil Pencarian:")
     
-    if qr_code:
-        st.write(f"QR Code terdeteksi: **{qr_code}**")
+    # PERBAIKAN: Periksa apakah hasilnya adalah string yang valid sebelum diproses
+    if qr_code_result and isinstance(qr_code_result, str):
+        st.write(f"QR Code terdeteksi: **{qr_code_result}**")
         
-        product_data = find_product_by_id(df, qr_code)
+        product_data = find_product_by_id(df, qr_code_result)
         
         if product_data is not None:
             st.success("Produk ditemukan!")
@@ -109,6 +99,6 @@ if not df.empty:
             st.write(f"**Harga:** Rp {int(product_data['harga']):,}")
             st.write(f"**Deskripsi:** {product_data['deskripsi']}")
         else:
-            st.error(f"Produk dengan ID '{qr_code}' tidak ditemukan di database.")
+            st.error(f"Produk dengan ID '{qr_code_result}' tidak ditemukan di database.")
     else:
         st.info("Belum ada QR code yang dipindai. Arahkan kamera Anda ke QR code.")
