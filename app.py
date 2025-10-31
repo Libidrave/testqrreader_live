@@ -1,26 +1,79 @@
-import cv2
-import numpy as np
 import streamlit as st
+import pandas as pd
+import cv2
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
+import threading
 
-from camera_input_live import camera_input_live
+# Lock untuk thread-safe access ke session state
+lock = threading.Lock()
 
-"# Streamlit camera input live Demo"
-"## Try holding a qr code in front of your webcam"
+# Kelas untuk memproses frame video dan mendeteksi QR
+class QRCodeTransformer(VideoProcessorBase):
+    def __init__(self):
+        self.qr_detector = cv2.QRCodeDetector()
+        self.last_qr_code = None
 
-image = camera_input_live()
+    def recv(self, frame):
+        # img = frame.to_ndarray(format="bgr24")
+        
+        # Deteksi dan decode QR code
+        data, bbox, _ = self.qr_detector.detectAndDecode(frame)
+        
+        if data:
+            # Jika QR code baru terdeteksi
+            if data != self.last_qr_code:
+                self.last_qr_code = data
+                with lock:
+                    st.session_state['qr_code_result'] = data
+        
+        return frame
 
-if image is not None:
-    st.image(image)
-    bytes_data = image.getvalue()
-    cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+# Fungsi untuk memuat database
+@st.cache_data
+def load_data():
+    df = pd.read_csv('database.csv')
+    return df
 
-    detector = cv2.QRCodeDetector()
+# Memuat data
+df = load_data()
 
-    data, bbox, straight_qrcode = detector.detectAndDecode(cv2_img)
+st.title("Aplikasi Pembaca QR Code")
+st.write("Arahkan kamera ke QR code untuk mencari data produk.")
 
-    if data:
-        st.write("# Found QR code")
-        st.write(data)
-        with st.expander("Show details"):
-            st.write("BBox:", bbox)
-            st.write("Straight QR code:", straight_qrcode)
+# Inisialisasi session state jika belum ada
+if 'qr_code_result' not in st.session_state:
+    st.session_state['qr_code_result'] = None
+
+# Menjalankan WebRTC streamer
+webrtc_ctx = webrtc_streamer(
+    key="qr-scanner",
+    mode=WebRtcMode.SENDRECV,
+    video_processor_factory=QRCodeTransformer,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
+)
+
+# Fungsi untuk mencari data berdasarkan ID dari QR code
+def find_product_by_id(product_id):
+    product = df[df['id'] == product_id]
+    if not product.empty:
+        return product.iloc[0]
+    return None
+
+# Menampilkan hasil pencarian
+st.subheader("Hasil Pencarian:")
+if st.session_state['qr_code_result']:
+    product_id = st.session_state['qr_code_result']
+    st.write(f"QR Code terdeteksi: **{product_id}**")
+    
+    product_data = find_product_by_id(product_id)
+    
+    if product_data is not None:
+        st.success("Produk ditemukan!")
+        st.write(f"**Nama Produk:** {product_data['nama_produk']}")
+        st.write(f"**Harga:** Rp {product_data['harga']:,}")
+        st.write(f"**Deskripsi:** {product_data['deskripsi']}")
+    else:
+        st.error(f"Produk dengan ID '{product_id}' tidak ditemukan di database.")
+else:
+    st.info("Belum ada QR code yang dipindai.")
