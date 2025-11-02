@@ -1,5 +1,5 @@
 streamlit
-libzbar0
 pandas
 opencv-python-headless
 streamlit-webrtc
+
