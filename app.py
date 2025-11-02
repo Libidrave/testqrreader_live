@@ -4,37 +4,43 @@ import cv2
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, VideoProcessorBase
 from av import VideoFrame
 import queue
-import threading
+from pyzbar.pyzbar import decode # Import pyzbar
 
 # --- 1. Inisialisasi State di Awal ---
-# Gunakan session_state untuk menyimpan queue. Ini membuatnya bisa diakses
-# oleh semua bagian aplikasi secara thread-safe.
 if "result_queue" not in st.session_state:
     st.session_state.result_queue = queue.Queue()
 
-# Lock untuk mencegah beberapa update UI sekaligus (opsional, tapi bagus)
-ui_lock = threading.Lock()
-
-# --- 2. Kelas Processor yang Disederhanakan ---
-# Tidak perlu lagi Factory yang rumit.
+# --- 2. Kelas Processor Menggunakan Pyzbar ---
 class QRCodeVideoProcessor(VideoProcessorBase):
     def __init__(self):
-        # Tidak ada argumen yang dibutuhkan saat inisialisasi
-        self.qr_detector = cv2.QRCodeDetector()
         self.last_qr_code = None
 
     def recv(self, frame: VideoFrame) -> VideoFrame:
         img = frame.to_ndarray(format="bgr24")
         
-        data, bbox, _ = self.qr_detector.detectAndDecode(img)
+        # Gunakan pyzbar.decode. Ini jauh lebih cepat dan andal.
+        # Ia mengembalikan sebuah list dari semua QR code yang ditemukan.
+        decoded_objects = decode(img)
         
-        if bbox is not None:
-            pts = bbox[0].astype(int)
-            cv2.polylines(img, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
+        data = None
+        for obj in decoded_objects:
+            # Ambil data dari QR code pertama yang ditemukan
+            if not data:
+                # Data di-decode sebagai bytes, jadi kita perlu .decode('utf-8')
+                data = obj.data.decode('utf-8')
+            
+            # Gambar kotak di sekitar QR code
+            points = obj.polygon
+            if len(points) > 3:
+                pts = [(p.x, p.y) for p in points]
+                pts = [tuple(map(int, pt)) for pt in pts]
+                # Ubah menjadi array yang bisa diterima cv2.polylines
+                cv2.polylines(img, [np.array(pts)], isClosed=True, color=(0, 255, 0), thickness=2)
 
+        # Cek jika ada data BARU yang ditemukan
         if data and data != self.last_qr_code:
             self.last_qr_code = data
-            # Akses queue dari session_state untuk memasukkan data
+            # Masukkan data ke queue
             st.session_state.result_queue.put(data)
         
         return VideoFrame.from_ndarray(img, format="bgr24")
@@ -56,18 +62,14 @@ df = load_data()
 st.title("Aplikasi Pembaca QR Code")
 st.write("Arahkan kamera ke QR code untuk mencari data produk.")
 
-# --- 3. Pemanggilan webrtc_streamer yang Jauh Lebih Sederhana ---
 webrtc_ctx = webrtc_streamer(
     key="qr-scanner",
     mode=WebRtcMode.SENDRECV,
-    # Cukup berikan kelas Processor-nya langsung.
-    # streamlit-webrtc akan membuat instance-nya sendiri tanpa argumen.
     video_processor_factory=QRCodeVideoProcessor,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
 
-# --- Logika untuk menampilkan hasil ---
 result_placeholder = st.empty()
 
 if not webrtc_ctx.state.playing:
@@ -76,13 +78,11 @@ else:
     if "last_scanned_id" not in st.session_state:
         st.session_state.last_scanned_id = None
         
-    with ui_lock:
-        try:
-            # Ambil hasil dari queue yang ada di session_state
-            product_id = st.session_state.result_queue.get(timeout=1.0)
-            st.session_state.last_scanned_id = product_id
-        except queue.Empty:
-            product_id = st.session_state.last_scanned_id
+    try:
+        product_id = st.session_state.result_queue.get(timeout=1.0)
+        st.session_state.last_scanned_id = product_id
+    except queue.Empty:
+        product_id = st.session_state.last_scanned_id
 
     with result_placeholder.container():
         st.subheader("Hasil Pencarian:")
@@ -101,7 +101,3 @@ else:
                 st.error(f"Produk dengan ID '{product_id}' tidak ditemukan.")
         else:
             st.info("Kamera aktif. Arahkan ke QR Code...")
-
-# Tidak perlu st.rerun() karena interaksi dengan queue sudah cukup
-# untuk menjaga aplikasi tetap hidup dan memeriksa update.
-# Jika UI terasa lambat, Anda bisa menambahkannya kembali.
