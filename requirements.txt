@@ -2,6 +2,7 @@ streamlit
 pandas
 opencv-python-headless
 streamlit-webrtc
+streamlit-camera-input-live
 av
 pyzbar
 numpy
