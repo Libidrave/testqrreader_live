@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from streamlit_camera_input_live import camera_input_live
+from camera_input_live import camera_input_live
 from pyzbar.pyzbar import decode
 from PIL import Image
 import numpy as np
@@ -91,3 +91,4 @@ with result_placeholder.container():
             st.error(f"Produk dengan ID '{last_id}' tidak ditemukan di database.")
     else:
         st.info("Belum ada QR code yang dipindai. Arahkan kamera ke QR code.")
+
