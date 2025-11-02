@@ -8,15 +8,12 @@ import cv2
 import time
 
 # --- 1. Inisialisasi Session State untuk Throttling ---
-# Kita akan menyimpan waktu terakhir kali kita memproses frame.
 if 'last_process_time' not in st.session_state:
     st.session_state.last_process_time = 0
 
-# Definisikan interval pemrosesan (dalam detik)
-# Artinya, kita hanya akan memproses satu frame setiap 1.5 detik.
 PROCESS_INTERVAL = 0.7
 
-# --- Fungsi dan Logika Utama Aplikasi ---
+# --- Fungsi dan Logika Utama ---
 @st.cache_data
 def load_data():
     try:
@@ -29,11 +26,9 @@ def load_data():
 
 df = load_data()
 
-st.title("Aplikasi Pembaca QR Code Live")
-st.write("Arahkan kamera ke QR code. Pemindaian akan dilakukan secara berkala.")
+st.title("Aplikasi QR Code Live")
+st.write("Arahkan kamera ke QR code.")
 
-# --- 2. Menggunakan camera_input_live dengan Resolusi Rendah ---
-# Mengatur resolusi (width, height) akan sangat membantu performa.
 image = camera_input_live(
     width=640,
     height=480
@@ -46,8 +41,7 @@ result_placeholder = st.empty()
 if image is not None:
     current_time = time.time()
     
-    # --- 3. Logika Throttling ---
-    # Cek apakah sudah cukup waktu berlalu sejak pemrosesan terakhir.
+    # --- 2. Logika Throttling ---
     if current_time - st.session_state.last_process_time > PROCESS_INTERVAL:
         # Update waktu terakhir pemrosesan
         st.session_state.last_process_time = current_time
@@ -73,8 +67,7 @@ if image is not None:
             product_id = decoded_objects[0].data.decode('utf-8')
             st.session_state.last_scanned_id = product_id
 
-# --- 4. Tampilkan Hasil Terakhir (di luar blok throttling) ---
-# Tampilan UI di-update setiap saat, tapi logika berat hanya berjalan sesekali.
+# --- 3. Tampilkan Hasil Terakhir ---
 with result_placeholder.container():
     last_id = st.session_state.get('last_scanned_id', None)
     
@@ -94,6 +87,7 @@ with result_placeholder.container():
             st.error(f"Produk dengan ID '{last_id}' tidak ditemukan di database.")
     else:
         st.info("Belum ada QR code yang dipindai. Arahkan kamera ke QR code.")
+
 
 
 
