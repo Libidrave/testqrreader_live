@@ -1,54 +1,22 @@
 import streamlit as st
 import pandas as pd
-import cv2
-import numpy as np  # Pastikan numpy di-import
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, VideoProcessorBase
-from av import VideoFrame
-import queue
+from streamlit_camera_input_live import camera_input_live
 from pyzbar.pyzbar import decode
+from PIL import Image
+import numpy as np
+import cv2
+import time
 
-# --- 1. Inisialisasi State di Awal ---
-# Gunakan session_state untuk menyimpan queue. Ini membuatnya bisa diakses
-# oleh semua bagian aplikasi secara thread-safe.
-if "result_queue" not in st.session_state:
-    st.session_state.result_queue = queue.Queue()
+# --- 1. Inisialisasi Session State untuk Throttling ---
+# Kita akan menyimpan waktu terakhir kali kita memproses frame.
+if 'last_process_time' not in st.session_state:
+    st.session_state.last_process_time = 0
 
-# --- 2. Kelas Processor yang Benar dan Sederhana ---
-#    - Mewarisi dari VideoProcessorBase
-#    - __init__ tidak memiliki argumen
-#    - Mengakses queue dari st.session_state
-class QRCodeVideoProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.last_qr_code = None
+# Definisikan interval pemrosesan (dalam detik)
+# Artinya, kita hanya akan memproses satu frame setiap 1.5 detik.
+PROCESS_INTERVAL = 1.5 
 
-    def recv(self, frame: VideoFrame) -> VideoFrame:
-        img = frame.to_ndarray(format="bgr24")
-        
-        # Gunakan pyzbar.decode yang lebih andal
-        decoded_objects = decode(img)
-        
-        data = None
-        for obj in decoded_objects:
-            # Ambil data dari QR code pertama yang ditemukan
-            if not data:
-                data = obj.data.decode('utf-8')
-            
-            # Gambar kotak di sekitar QR code
-            points = obj.polygon
-            if len(points) > 3:
-                pts = np.array([(p.x, p.y) for p in points], dtype=np.int32)
-                cv2.polylines(img, [pts], isClosed=True, color=(0, 255, 0), thickness=3)
-
-        # Cek jika ada data BARU yang ditemukan
-        if data and data != self.last_qr_code:
-            self.last_qr_code = data
-            # Masukkan data ke queue yang ada di session_state
-            st.session_state.result_queue.put(data)
-        
-        return VideoFrame.from_ndarray(img, format="bgr24")
-
-# --- Fungsi dan Logika Utama Aplikasi Streamlit ---
-
+# --- Fungsi dan Logika Utama Aplikasi ---
 @st.cache_data
 def load_data():
     try:
@@ -61,50 +29,65 @@ def load_data():
 
 df = load_data()
 
-st.title("Aplikasi Pembaca QR Code")
-st.write("Arahkan kamera ke QR code untuk mencari data produk.")
+st.title("Aplikasi Pembaca QR Code Live")
+st.write("Arahkan kamera ke QR code. Pemindaian akan dilakukan secara berkala.")
 
-# --- 3. Pemanggilan webrtc_streamer yang Benar ---
-webrtc_ctx = webrtc_streamer(
-    key="qr-scanner",
-    mode=WebRtcMode.SENDRECV,
-    # Cukup berikan NAMA KELASNYA. Streamlit-webrtc akan membuat instance-nya
-    # secara internal tanpa argumen, yang sekarang sudah benar.
-    video_processor_factory=QRCodeVideoProcessor,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
+# --- 2. Menggunakan camera_input_live dengan Resolusi Rendah ---
+# Mengatur resolusi (width, height) akan sangat membantu performa.
+image = camera_input_live(
+    width=640,
+    height=480
 )
 
-# --- Logika untuk menampilkan hasil ---
+# Placeholder untuk menampilkan hasil
 result_placeholder = st.empty()
 
-if not webrtc_ctx.state.playing:
-    result_placeholder.info("Tekan 'START' untuk menyalakan kamera.")
-else:
-    if "last_scanned_id" not in st.session_state:
-        st.session_state.last_scanned_id = None
+# Proses gambar HANYA jika ada gambar yang diterima
+if image is not None:
+    current_time = time.time()
+    
+    # --- 3. Logika Throttling ---
+    # Cek apakah sudah cukup waktu berlalu sejak pemrosesan terakhir.
+    if current_time - st.session_state.last_process_time > PROCESS_INTERVAL:
+        # Update waktu terakhir pemrosesan
+        st.session_state.last_process_time = current_time
         
-    try:
-        # Ambil hasil dari queue yang ada di session_state
-        product_id = st.session_state.result_queue.get(timeout=1.0)
-        st.session_state.last_scanned_id = product_id
-    except queue.Empty:
-        product_id = st.session_state.last_scanned_id
+        # Konversi gambar ke format yang bisa dibaca OpenCV
+        pil_image = Image.open(image)
+        opencv_image = np.array(pil_image)
+        gray_image = cv2.cvtColor(opencv_image, cv2.COLOR_RGB2GRAY)
+        
+        # Lakukan decoding
+        decoded_objects = decode(gray_image)
+        
+        # Update session state untuk menyimpan hasil terakhir
+        if 'last_scanned_id' not in st.session_state:
+            st.session_state.last_scanned_id = None
+        
+        product_id = None
+        if decoded_objects:
+            # Ambil hasil decode pertama
+            product_id = decoded_objects[0].data.decode('utf-8')
+            st.session_state.last_scanned_id = product_id
 
-    with result_placeholder.container():
-        st.subheader("Hasil Pencarian:")
-        if product_id:
-            st.write(f"QR Code Terakhir Dipindai: **{product_id}**")
-            
-            product_df = df[df['id'] == str(product_id)]
-            
-            if not product_df.empty:
-                product = product_df.iloc[0]
-                st.success("Produk ditemukan!")
-                st.write(f"**Nama Produk:** {product['nama_produk']}")
-                st.write(f"**Harga:** Rp {product['harga']:,}")
-                st.write(f"**Deskripsi:** {product['deskripsi']}")
-            else:
-                st.error(f"Produk dengan ID '{product_id}' tidak ditemukan.")
+# --- 4. Tampilkan Hasil Terakhir (di luar blok throttling) ---
+# Tampilan UI di-update setiap saat, tapi logika berat hanya berjalan sesekali.
+with result_placeholder.container():
+    last_id = st.session_state.get('last_scanned_id', None)
+    
+    st.subheader("Hasil Pemindaian:")
+    if last_id:
+        st.write(f"QR Code Terakhir Dipindai: **{last_id}**")
+        
+        product_df = df[df['id'] == str(last_id)]
+        
+        if not product_df.empty:
+            product = product_df.iloc[0]
+            st.success("Produk ditemukan!")
+            st.write(f"**Nama Produk:** {product['nama_produk']}")
+            st.write(f"**Harga:** Rp {product['harga']:,}")
+            st.write(f"**Deskripsi:** {product['deskripsi']}")
         else:
-            st.info("Kamera aktif. Arahkan ke QR Code...")
+            st.error(f"Produk dengan ID '{last_id}' tidak ditemukan di database.")
+    else:
+        st.info("Belum ada QR code yang dipindai. Arahkan kamera ke QR code.")
