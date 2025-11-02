@@ -14,7 +14,7 @@ if 'last_process_time' not in st.session_state:
 
 # Definisikan interval pemrosesan (dalam detik)
 # Artinya, kita hanya akan memproses satu frame setiap 1.5 detik.
-PROCESS_INTERVAL = 1.5 
+PROCESS_INTERVAL = 0.7
 
 # --- Fungsi dan Logika Utama Aplikasi ---
 @st.cache_data
@@ -94,6 +94,7 @@ with result_placeholder.container():
             st.error(f"Produk dengan ID '{last_id}' tidak ditemukan di database.")
     else:
         st.info("Belum ada QR code yang dipindai. Arahkan kamera ke QR code.")
+
 
 
 
