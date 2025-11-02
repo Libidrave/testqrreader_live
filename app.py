@@ -1,21 +1,26 @@
 import streamlit as st
 import pandas as pd
 import cv2
-from streamlit_webrtc import (
-    webrtc_streamer, 
-    WebRtcMode, 
-    VideoProcessorBase, 
-    VideoProcessorFactory
-)
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, VideoProcessorBase
 from av import VideoFrame
 import queue
+import threading
 
-# --- 1. KELAS PROCESSOR: Melakukan deteksi QR ---
-# Kelas ini melakukan pekerjaan utama pada setiap frame video.
+# --- 1. Inisialisasi State di Awal ---
+# Gunakan session_state untuk menyimpan queue. Ini membuatnya bisa diakses
+# oleh semua bagian aplikasi secara thread-safe.
+if "result_queue" not in st.session_state:
+    st.session_state.result_queue = queue.Queue()
+
+# Lock untuk mencegah beberapa update UI sekaligus (opsional, tapi bagus)
+ui_lock = threading.Lock()
+
+# --- 2. Kelas Processor yang Disederhanakan ---
+# Tidak perlu lagi Factory yang rumit.
 class QRCodeVideoProcessor(VideoProcessorBase):
-    def __init__(self, result_queue: queue.Queue):
+    def __init__(self):
+        # Tidak ada argumen yang dibutuhkan saat inisialisasi
         self.qr_detector = cv2.QRCodeDetector()
-        self.result_queue = result_queue
         self.last_qr_code = None
 
     def recv(self, frame: VideoFrame) -> VideoFrame:
@@ -29,23 +34,10 @@ class QRCodeVideoProcessor(VideoProcessorBase):
 
         if data and data != self.last_qr_code:
             self.last_qr_code = data
-            # Masukkan hasil ke dalam queue yang diterima saat inisialisasi
-            self.result_queue.put(data)
+            # Akses queue dari session_state untuk memasukkan data
+            st.session_state.result_queue.put(data)
         
         return VideoFrame.from_ndarray(img, format="bgr24")
-
-
-# --- 2. KELAS FACTORY: Membuat instance dari Processor ---
-# Tugas kelas ini HANYA untuk membuat objek QRCodeVideoProcessor.
-class QRCodeProcessorFactory(VideoProcessorFactory):
-    def __init__(self, result_queue: queue.Queue):
-        # Simpan queue di factory
-        self.result_queue = result_queue
-
-    def create(self) -> VideoProcessorBase:
-        # Buat instance QRCodeVideoProcessor dan berikan queue padanya.
-        return QRCodeVideoProcessor(self.result_queue)
-
 
 # --- Fungsi dan Logika Utama Aplikasi Streamlit ---
 
@@ -64,52 +56,52 @@ df = load_data()
 st.title("Aplikasi Pembaca QR Code")
 st.write("Arahkan kamera ke QR code untuk mencari data produk.")
 
-# Buat queue di scope utama
-result_queue = queue.Queue()
-
-# --- 3. PEMANGGILAN WEBRTC_STREAMER YANG DIPERBAIKI ---
-# Kita sekarang memberikan instance dari FACTORY kita.
+# --- 3. Pemanggilan webrtc_streamer yang Jauh Lebih Sederhana ---
 webrtc_ctx = webrtc_streamer(
     key="qr-scanner",
     mode=WebRtcMode.SENDRECV,
-    video_processor_factory=QRCodeProcessorFactory(result_queue), # INI PERUBAHANNYA
+    # Cukup berikan kelas Processor-nya langsung.
+    # streamlit-webrtc akan membuat instance-nya sendiri tanpa argumen.
+    video_processor_factory=QRCodeVideoProcessor,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
 
 # --- Logika untuk menampilkan hasil ---
+result_placeholder = st.empty()
+
 if not webrtc_ctx.state.playing:
-    st.info("Tekan 'START' untuk menyalakan kamera.")
+    result_placeholder.info("Tekan 'START' untuk menyalakan kamera.")
 else:
-    st.info("Kamera aktif. Arahkan ke QR Code...")
-    
     if "last_scanned_id" not in st.session_state:
         st.session_state.last_scanned_id = None
-
-    try:
-        product_id = result_queue.get(timeout=1.0)
-        st.session_state.last_scanned_id = product_id
-        # Hapus placeholder setelah scan pertama berhasil
-        # st.empty() 
-    except queue.Empty:
-        product_id = st.session_state.last_scanned_id
-
-    st.subheader("Hasil Pencarian:")
-    if product_id:
-        st.write(f"QR Code Terakhir Dipindai: **{product_id}**")
         
-        product_df = df[df['id'] == str(product_id)]
-        
-        if not product_df.empty:
-            product = product_df.iloc[0]
-            st.success("Produk ditemukan!")
-            st.write(f"**Nama Produk:** {product['nama_produk']}")
-            st.write(f"**Harga:** Rp {product['harga']:,}")
-            st.write(f"**Deskripsi:** {product['deskripsi']}")
+    with ui_lock:
+        try:
+            # Ambil hasil dari queue yang ada di session_state
+            product_id = st.session_state.result_queue.get(timeout=1.0)
+            st.session_state.last_scanned_id = product_id
+        except queue.Empty:
+            product_id = st.session_state.last_scanned_id
+
+    with result_placeholder.container():
+        st.subheader("Hasil Pencarian:")
+        if product_id:
+            st.write(f"QR Code Terakhir Dipindai: **{product_id}**")
+            
+            product_df = df[df['id'] == str(product_id)]
+            
+            if not product_df.empty:
+                product = product_df.iloc[0]
+                st.success("Produk ditemukan!")
+                st.write(f"**Nama Produk:** {product['nama_produk']}")
+                st.write(f"**Harga:** Rp {product['harga']:,}")
+                st.write(f"**Deskripsi:** {product['deskripsi']}")
+            else:
+                st.error(f"Produk dengan ID '{product_id}' tidak ditemukan.")
         else:
-            st.error(f"Produk dengan ID '{product_id}' tidak ditemukan.")
-    else:
-        st.write("Belum ada QR code yang dipindai.")
-    
-    # Trigger rerun untuk menjaga UI tetap responsif
-    st.rerun()
+            st.info("Kamera aktif. Arahkan ke QR Code...")
+
+# Tidak perlu st.rerun() karena interaksi dengan queue sudah cukup
+# untuk menjaga aplikasi tetap hidup dan memeriksa update.
+# Jika UI terasa lambat, Anda bisa menambahkannya kembali.
