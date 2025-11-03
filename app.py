@@ -50,6 +50,7 @@ if image is not None:
         # pil_image = Image.open(image)
         # opencv_image = np.array(pil_image)
         # gray_image = cv2.cvtColor(opencv_image, cv2.COLOR_RGB2GRAY)
+        st.image(image)
         bytes_data = image.getvalue()        
         cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
         gray_image = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2GRAY)
@@ -87,6 +88,7 @@ with result_placeholder.container():
             st.error(f"Produk dengan ID '{last_id}' tidak ditemukan di database.")
     else:
         st.info("Belum ada QR code yang dipindai. Arahkan kamera ke QR code.")
+
 
 
 
